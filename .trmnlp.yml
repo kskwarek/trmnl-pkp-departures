@@ -1,0 +1,19 @@
+---
+# Local preview settings for trmnlp (https://github.com/usetrmnl/trmnlp).
+watch:
+- src
+- ".trmnlp.yml"
+custom_fields:
+  api_key: your_pkp_plk_api_key
+  station_id: '33019'
+  station_search: ''
+  station_label: ''
+  carriers: ''
+  language: pl
+variables:
+  trmnl:
+    user:
+      utc_offset: 3600
+      locale: pl
+      time_zone: Warsaw
+      time_zone_iana: Europe/Warsaw

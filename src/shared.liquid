@@ -1,0 +1,294 @@
+{%- comment -%}
+  PKP Departures - shared logic, prepended to every layout.
+  Builds `pkp_html`, which each layout file prints.
+
+  Board mode (station ID set), two polled URLs:
+    IDX_0 = /api/v1/schedules/shortened?fullRoute=true   planned timetable, full routes
+    IDX_1 = /api/v1/operations/shortened?withPlanned=true live delays at the station
+  Lookup mode (no station ID), one polled URL:
+    stations = /api/v1/dictionaries/stations?search=...
+{%- endcomment -%}
+
+{%- assign cfg = trmnl.plugin_settings.custom_fields_values -%}
+{%- assign station_id = cfg.station_id | default: 0 | plus: 0 -%}
+{%- assign lang = cfg.language | default: "pl" -%}
+
+{%- if lang == "en" -%}
+  {%- assign t_time = "Time" -%}
+  {%- assign t_dest = "Destination" -%}
+  {%- assign t_train = "Train" -%}
+  {%- assign t_platform = "Platform" -%}
+  {%- assign t_status = "Delay" -%}
+  {%- assign t_on_time = "On time" -%}
+  {%- assign t_cancelled = "Cancelled" -%}
+  {%- assign t_updated = "Updated" -%}
+  {%- assign t_empty = "No upcoming departures" -%}
+  {%- assign t_lookup = "Station search" -%}
+  {%- assign t_lookup_hint = "Enter the ID of your station in the plugin settings." -%}
+  {%- assign t_lookup_none = "No stations found. Check the spelling of Station search." -%}
+  {%- assign t_lookup_empty = "Type the beginning of a station name into Station search, then refresh." -%}
+  {%- assign t_station = "Station" -%}
+  {%- assign t_error = "Could not load departures" -%}
+  {%- assign t_error_api = "The PKP PLK API request failed. Check the API key, the station ID and the hourly request limit." -%}
+  {%- assign t_error_size = "Too much timetable data for this station. Narrow it down with the Carriers setting, e.g. IC." -%}
+  {%- assign t_waiting = "Waiting for the first data refresh." -%}
+{%- else -%}
+  {%- assign t_time = "Odjazd" -%}
+  {%- assign t_dest = "Kierunek" -%}
+  {%- assign t_train = "Pociąg" -%}
+  {%- assign t_platform = "Peron" -%}
+  {%- assign t_status = "Opóźnienia" -%}
+  {%- assign t_on_time = "o czasie" -%}
+  {%- assign t_cancelled = "odwołany" -%}
+  {%- assign t_updated = "Aktualizacja" -%}
+  {%- assign t_empty = "Brak najbliższych odjazdów" -%}
+  {%- assign t_lookup = "Wyszukiwanie stacji" -%}
+  {%- assign t_lookup_hint = "Wpisz ID swojej stacji w ustawieniach wtyczki." -%}
+  {%- assign t_lookup_none = "Nie znaleziono stacji. Sprawdź pisownię w polu Station search." -%}
+  {%- assign t_lookup_empty = "Wpisz początek nazwy stacji w polu Station search i odśwież dane." -%}
+  {%- assign t_station = "Stacja" -%}
+  {%- assign t_error = "Nie udało się pobrać odjazdów" -%}
+  {%- assign t_error_api = "Zapytanie do API PKP PLK nie powiodło się. Sprawdź klucz API, ID stacji i godzinny limit zapytań." -%}
+  {%- assign t_error_size = "Za dużo danych rozkładowych dla tej stacji. Ogranicz przewoźników w polu Carriers, np. IC." -%}
+  {%- assign t_waiting = "Oczekiwanie na pierwsze pobranie danych." -%}
+{%- endif -%}
+
+{%- comment -%} Layout: how many rows and which columns fit. {%- endcomment -%}
+{%- assign max_rows = 8 -%}
+{%- assign wide = true -%}
+{%- assign dest_chars = 28 -%}
+{%- if size == "half_horizontal" -%}
+  {%- assign max_rows = 3 -%}
+{%- elsif size == "half_vertical" -%}
+  {%- assign max_rows = 12 -%}
+  {%- assign wide = false -%}
+  {%- assign dest_chars = 16 -%}
+{%- elsif size == "quadrant" -%}
+  {%- assign max_rows = 4 -%}
+  {%- assign wide = false -%}
+  {%- assign dest_chars = 16 -%}
+{%- endif -%}
+
+{%- comment -%} Local time, in minutes since midnight. Uses the Larapaper user's time zone. {%- endcomment -%}
+{%- assign tz_offset = trmnl.user.utc_offset | default: 0 | plus: 0 -%}
+{%- assign now_local = trmnl.system.timestamp_utc | default: 0 | plus: tz_offset -%}
+{%- assign now_min = now_local | modulo: 86400 | divided_by: 60 -%}
+{%- assign fetched_local = trmnl.plugin_settings.data_fetched_utc | default: trmnl.system.timestamp_utc | plus: tz_offset -%}
+{%- assign fetched_min = fetched_local | modulo: 86400 | divided_by: 60 -%}
+{%- assign fetched_h = fetched_min | divided_by: 60 -%}
+{%- assign fetched_m = fetched_min | modulo: 60 -%}
+{%- capture updated_at -%}{% if fetched_h < 10 %}0{% endif %}{{ fetched_h }}:{% if fetched_m < 10 %}0{% endif %}{{ fetched_m }}{%- endcapture -%}
+
+{%- comment -%} Which screen to show. {%- endcomment -%}
+{%- assign pkp_mode = "board" -%}
+{%- assign pkp_error = t_error_api -%}
+{%- if error -%}
+  {%- assign pkp_mode = "error" -%}
+  {%- if error contains "size" -%}{%- assign pkp_error = t_error_size -%}{%- endif -%}
+{%- elsif station_id == 0 -%}
+  {%- assign pkp_mode = "lookup" -%}
+{%- elsif IDX_0.error -%}
+  {%- comment -%} If only IDX_1 (live data) fails, the planned board is still shown. {%- endcomment -%}
+  {%- assign pkp_mode = "error" -%}
+{%- elsif IDX_0.rt == nil -%}
+  {%- assign pkp_mode = "error" -%}
+  {%- assign pkp_error = t_waiting -%}
+{%- endif -%}
+
+{%- assign station_name = cfg.station_label -%}
+
+{%- if pkp_mode == "board" -%}
+  {%- assign names = IDX_0.dc.st -%}
+  {%- assign today = IDX_0.pr.f | slice: 0, 10 -%}
+  {%- assign live = IDX_1.tr -%}
+  {%- if station_name == blank -%}
+    {%- assign station_entry = names[station_id] -%}
+    {%- assign station_name = station_entry.nm -%}
+  {%- endif -%}
+
+  {%- comment -%}
+    Pass 1: departures at this station from the planned timetable.
+    Entry: sortkey~HH:MM~train~destination~platform~scheduleId~orderId
+    Planned departures up to 3 h in the past are kept, in case they are running late.
+  {%- endcomment -%}
+  {%- assign earliest = now_min | minus: 180 -%}
+  {%- assign entries = "" -%}
+  {%- for r in IDX_0.rt -%}
+    {%- assign my = nil -%}
+    {%- assign last = nil -%}
+    {%- assign last_ord = -1 -%}
+    {%- for s in r.st -%}
+      {%- if my == nil and s.id == station_id and s.dtm != blank -%}{%- assign my = s -%}{%- endif -%}
+      {%- assign ord = s.ord | default: 0 -%}
+      {%- if ord >= last_ord -%}
+        {%- assign last_ord = ord -%}
+        {%- assign last = s -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if my == nil or last.id == station_id -%}{%- continue -%}{%- endif -%}
+
+    {%- assign stop_type = my.stn | default: "" | downcase -%}
+    {%- if stop_type contains "techn" or stop_type contains "służb" or stop_type contains "przelot" or stop_type contains "bez zatrzym" -%}{%- continue -%}{%- endif -%}
+
+    {%- assign dep_h = my.dtm | slice: 0, 2 | plus: 0 -%}
+    {%- assign dep_m = my.dtm | slice: 3, 2 | plus: 0 -%}
+    {%- assign dep_day = my.ddy | default: 0 -%}
+    {%- assign dep_min = dep_day | times: 1440 | plus: dep_m -%}
+    {%- assign dep_min = dep_h | times: 60 | plus: dep_min -%}
+    {%- if dep_min < earliest -%}{%- continue -%}{%- endif -%}
+
+    {%- assign category = my.dcc | default: r.ccs | default: r.cc -%}
+    {%- assign number = my.dtn | default: r.nn -%}
+    {%- assign dest_entry = names[last.id] -%}
+    {%- assign dest = dest_entry.nm | default: last.id -%}
+    {%- assign platform = my.dpl | default: "" -%}
+    {%- if my.dtr != blank -%}
+      {%- if platform == "" -%}{%- assign platform = "–" -%}{%- endif -%}
+      {%- assign platform = platform | append: "/" | append: my.dtr -%}
+    {%- endif -%}
+    {%- assign order = r.toid | default: r.oid -%}
+    {%- assign sortkey = dep_min | plus: 10000 -%}
+    {%- capture entry -%}{{ sortkey }}~{{ my.dtm | slice: 0, 5 }}~{{ category }} {{ number }}~{{ dest }}~{{ platform }}~{{ r.sid }}~{{ order }}{%- endcapture -%}
+    {%- if entries != "" -%}{%- assign entries = entries | append: "^" -%}{%- endif -%}
+    {%- assign entries = entries | append: entry -%}
+  {%- endfor -%}
+  {%- assign entries = entries | split: "^" | sort -%}
+
+  {%- comment -%}
+    Pass 2: in time order, join live data and keep departures that have not left yet.
+    Row: HH:MM~train~destination~platform~status text~status kind (ok|late|cancelled)
+  {%- endcomment -%}
+  {%- assign rows = "" -%}
+  {%- assign row_count = 0 -%}
+  {%- for entry in entries -%}
+    {%- if row_count >= max_rows -%}{%- break -%}{%- endif -%}
+    {%- if entry == blank -%}{%- continue -%}{%- endif -%}
+    {%- assign f = entry | split: "~" -%}
+    {%- assign dep_min = f[0] | plus: 0 | minus: 10000 -%}
+    {%- assign sched_id = f[5] | plus: 0 -%}
+    {%- assign order = f[6] | plus: 0 -%}
+
+    {%- assign delay = nil -%}
+    {%- assign cancelled = false -%}
+    {%- assign departed = false -%}
+    {%- for t in live -%}
+      {%- if t.sid != sched_id -%}{%- continue -%}{%- endif -%}
+      {%- unless t.oid == order or t.toid == order -%}{%- continue -%}{%- endunless -%}
+      {%- assign op_date = t.od | slice: 0, 10 -%}
+      {%- if today != blank and op_date != today -%}{%- continue -%}{%- endif -%}
+      {%- if t.s == "X" -%}{%- assign cancelled = true -%}{%- endif -%}
+      {%- for ls in t.st -%}
+        {%- if ls.id == station_id -%}
+          {%- assign delay = ls.ddm -%}
+          {%- if ls.cn -%}{%- assign cancelled = true -%}{%- endif -%}
+          {%- comment -%} `ad` is only a forecast until the stop is confirmed (`cf`). {%- endcomment -%}
+          {%- if ls.cf -%}{%- assign departed = true -%}{%- endif -%}
+          {%- break -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- break -%}
+    {%- endfor -%}
+
+    {%- if departed -%}{%- continue -%}{%- endif -%}
+    {%- assign delay_min = delay | default: 0 -%}
+    {%- assign expected = dep_min | plus: delay_min -%}
+    {%- if expected < now_min -%}{%- continue -%}{%- endif -%}
+
+    {%- if cancelled -%}
+      {%- assign status = t_cancelled -%}
+      {%- assign kind = "cancelled" -%}
+    {%- elsif delay_min > 0 -%}
+      {%- capture status -%}+{{ delay_min }} min{%- endcapture -%}
+      {%- assign kind = "late" -%}
+    {%- else -%}
+      {%- assign status = t_on_time -%}
+      {%- assign kind = "ok" -%}
+    {%- endif -%}
+    {%- capture row -%}{{ f[1] }}~{{ f[2] }}~{{ f[3] }}~{{ f[4] }}~{{ status }}~{{ kind }}{%- endcapture -%}
+    {%- if rows != "" -%}{%- assign rows = rows | append: "^" -%}{%- endif -%}
+    {%- assign rows = rows | append: row -%}
+    {%- assign row_count = row_count | plus: 1 -%}
+  {%- endfor -%}
+  {%- assign rows = rows | split: "^" -%}
+{%- endif -%}
+
+{%- if station_name == blank -%}{%- assign station_name = "PKP" -%}{%- endif -%}
+
+{%- capture pkp_icon -%}data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='4' y='1' width='16' height='17' rx='4' fill='black'/><rect x='7' y='4' width='10' height='6' rx='1' fill='white'/><circle cx='8.5' cy='14' r='1.5' fill='white'/><circle cx='15.5' cy='14' r='1.5' fill='white'/><path d='M7 18 L4 23 M17 18 L20 23' stroke='black' stroke-width='2'/></svg>{%- endcapture -%}
+
+{%- capture pkp_html -%}
+{%- if pkp_mode == "board" -%}
+  {%- if row_count == 0 -%}
+    <div class="layout layout--col layout--center">
+      <span class="title">{{ t_empty }}</span>
+    </div>
+  {%- else -%}
+    <div class="layout layout--col layout--top layout--stretch-x">
+      <table class="table{% if wide == false %} table--condensed{% endif %}">
+        <thead>
+          <tr>
+            <th style="width: {% if wide %}100px{% else %}96px{% endif %}"><span class="title">{{ t_time }}</span></th>
+            <th{% if wide %} style="width: 270px"{% endif %}><span class="title">{{ t_dest }}</span></th>
+            <th style="width: {% if wide %}140px{% else %}118px; padding-left: 8px{% endif %}"><span class="title">{{ t_status }}</span></th>
+            {%- if wide %}
+            <th style="width: 140px"><span class="title">{{ t_train }}</span></th>
+            <th><span class="title">{{ t_platform }}</span></th>
+            {%- endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {%- for row in rows %}
+          {%- assign c = row | split: "~" %}
+          <tr>
+            <td><span class="label">{{ c[0] }}</span></td>
+            <td><span class="label" style="white-space: nowrap">{{ c[2] | truncate: dest_chars, "…" }}</span></td>
+            <td{% unless wide %} style="padding-left: 8px"{% endunless %}>{% if c[5] == "ok" %}<span class="label">{{ c[4] }}</span>{% else %}<span class="label label--inverted">{{ c[4] }}</span>{% endif %}</td>
+            {%- if wide %}
+            <td><span class="label" style="white-space: nowrap">{{ c[1] }}</span></td>
+            <td><span class="label">{{ c[3] }}</span></td>
+            {%- endif %}
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  {%- endif -%}
+{%- elsif pkp_mode == "lookup" -%}
+  {%- assign station_name = t_lookup -%}
+  <div class="layout layout--col layout--top layout--stretch-x gap--small">
+    {%- if cfg.station_search == blank %}
+      <span class="description">{{ t_lookup_empty }}</span>
+    {%- elsif stations.size > 0 %}
+      <span class="description">{{ t_lookup_hint }}</span>
+      <table class="table table--condensed">
+        <thead>
+          <tr>
+            <th style="width: 100px"><span class="title">ID</span></th>
+            <th><span class="title">{{ t_station }}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {%- for s in stations limit: max_rows %}
+          <tr>
+            <td><span class="label">{{ s.id }}</span></td>
+            <td><span class="label" style="white-space: nowrap">{{ s.name | truncate: dest_chars, "…" }}</span></td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    {%- else %}
+      <span class="description">{{ t_lookup_none }}</span>
+    {%- endif %}
+  </div>
+{%- else -%}
+  <div class="layout layout--col layout--center gap--small">
+    <span class="title">{{ t_error }}</span>
+    <span class="description text--center">{{ pkp_error }}</span>
+  </div>
+{%- endif %}
+<div class="title_bar">
+  <img class="image" src="{{ pkp_icon }}" />
+  <span class="title">{{ station_name }}</span>
+  <span class="instance">{{ t_updated }} {{ updated_at }}</span>
+</div>
+{%- endcapture -%}

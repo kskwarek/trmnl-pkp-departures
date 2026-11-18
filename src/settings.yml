@@ -1,0 +1,58 @@
+---
+name: PKP Departures
+id: pkp-plk-departures
+strategy: polling
+# Slightly below a 5-minute device refresh, so every device wake-up re-fetches.
+refresh_interval: 4
+no_screen_padding: 'no'
+dark_mode: 'no'
+polling_verb: get
+# Two URLs (one per line) when a station ID is set:
+#   IDX_0 = planned timetable with full routes (train, destination, platform)
+#   IDX_1 = real-time operations at the station (delays, cancellations)
+# Without a station ID the plugin switches to station-lookup mode (single URL).
+polling_url: |-
+  {% if station_id != blank %}https://pdp-api.plk-sa.pl/api/v1/schedules/shortened?stations={{ station_id }}&fullRoute=true{% if carriers != blank %}&carriersInclude={{ carriers | url_encode }}{% endif %}
+  https://pdp-api.plk-sa.pl/api/v1/operations/shortened?stations={{ station_id }}&withPlanned=true{% if carriers != blank %}&carriersInclude={{ carriers | url_encode }}{% endif %}{% else %}https://pdp-api.plk-sa.pl/api/v1/dictionaries/stations?pageSize=20&search={{ station_search | url_encode }}{% endif %}
+polling_headers: X-API-Key={{ api_key }}
+custom_fields:
+- keyname: about
+  name: About this plugin
+  field_type: author_bio
+  description: Live train departures for a Polish railway station, from the official PKP PLK Open Data API (Otwarte Dane Kolejowe). Shows planned time, destination, train, platform and live delays. Data source: PKP Polskie Linie Kolejowe S.A.
+- keyname: api_key
+  name: PKP PLK API key
+  field_type: password
+  description: Free API key from the PKP PLK Open Data portal (Basic tier is enough).
+  help_text: Request a key at <a href="https://pdp-api.plk-sa.pl/" class="underline" target="_blank">pdp-api.plk-sa.pl</a>.
+- keyname: station_id
+  name: Station ID
+  field_type: number
+  optional: true
+  placeholder: '33019'
+  description: PLK station ID. Leave empty and fill in "Station search" to see matching stations and their IDs on the screen preview.
+- keyname: station_search
+  name: Station search
+  field_type: string
+  optional: true
+  placeholder: Kraków
+  description: Only used while Station ID is empty. Beginning of the station name, e.g. "Kraków" or "Warszawa Cen".
+- keyname: station_label
+  name: Display name
+  field_type: string
+  optional: true
+  placeholder: Kraków Główny
+  description: Optional name for the title bar. Defaults to the station name from the API.
+- keyname: carriers
+  name: Carriers
+  field_type: string
+  optional: true
+  placeholder: IC,KM
+  description: Optional comma-separated carrier codes to include (e.g. IC = PKP Intercity, KM = Koleje Mazowieckie, PR = Polregio). Also reduces data size for very busy stations.
+- keyname: language
+  name: Language
+  field_type: select
+  options:
+  - Polski: pl
+  - English: en
+  default: pl

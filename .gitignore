@@ -1,0 +1,9 @@
+# Personal API key – never commit
+.pkp_api_key
+.env
+
+# Generated locally
+dist/
+dev/preview/
+dev/mock/
+__pycache__/
