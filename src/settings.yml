@@ -19,7 +19,7 @@ custom_fields:
 - keyname: about
   name: About this plugin
   field_type: author_bio
-  description: Live train departures for a Polish railway station, from the official PKP PLK Open Data API (Otwarte Dane Kolejowe). Shows planned time, destination, train, platform and live delays. Data source: PKP Polskie Linie Kolejowe S.A.
+  description: 'Live train departures for a Polish railway station, from the official PKP PLK Open Data API (Otwarte Dane Kolejowe). Shows planned time, destination, train, platform and live delays. Data source: PKP Polskie Linie Kolejowe S.A.'
 - keyname: api_key
   name: PKP PLK API key
   field_type: password
